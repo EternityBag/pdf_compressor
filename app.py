@@ -1,53 +1,73 @@
 import streamlit as st
-import fitz  # PyMuPDF
-import io
+import tempfile
+import subprocess
+import os
 
-# Set up the web page
-st.set_page_config(page_title="PDF Compressor", page_icon="📄")
-st.title("📄 Quick PDF Compressor")
-st.write("Upload a heavy PDF to strip out unused data and compress its size.")
+st.set_page_config(page_title="Deep PDF Compressor", page_icon="🗜️")
+st.title("🗜️ Deep PDF Compressor")
+st.write("This tool uses Ghostscript to downsample images and deeply compress your PDF.")
 
-# Create a file uploader
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+# Compression level selector
+compression_level = st.radio(
+    "Select Compression Level:",
+    options=["Standard (/ebook - 150 DPI)", "Maximum (/screen - 72 DPI)"],
+    index=0,
+    help="Standard is best for reading. Maximum is best for strict file size limits (like email attachments), but images will lose quality."
+)
+
+uploaded_file = st.file_uploader("Choose a heavy PDF file", type="pdf")
 
 if uploaded_file is not None:
-    # Show the "Compress" button only after a file is uploaded
     if st.button("Compress PDF"):
-        with st.spinner("Compressing..."):
+        with st.spinner("Deeply compressing... this might take a few seconds."):
             try:
-                # Read the uploaded file into memory
-                pdf_bytes = uploaded_file.read()
-                original_size = len(pdf_bytes)
+                original_size = uploaded_file.size
                 
-                # Open the PDF using PyMuPDF from the memory stream
-                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                # Determine Ghostscript setting based on user choice
+                pdf_settings = "/ebook" if "Standard" in compression_level else "/screen"
+
+                # 1. Create secure temporary files
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_in:
+                    temp_in.write(uploaded_file.read())
+                    temp_in_path = temp_in.name
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_out:
+                    temp_out_path = temp_out.name
+
+                # 2. Build and run the Ghostscript command
+                gs_command = [
+                    "gs", 
+                    "-sDEVICE=pdfwrite", 
+                    "-dCompatibilityLevel=1.4",
+                    f"-dPDFSETTINGS={pdf_settings}",
+                    "-dNOPAUSE", 
+                    "-dQUIET", 
+                    "-dBATCH",
+                    f"-sOutputFile={temp_out_path}", 
+                    temp_in_path
+                ]
                 
-                # Create a new memory stream for the output
-                out_stream = io.BytesIO()
-                
-                # Compress and save to the new stream
-                doc.save(
-                    out_stream,
-                    garbage=4,          # Eliminate all unused objects
-                    deflate=True,       # Compress uncompressed streams
-                    clean=True          # Clean and sanitize content streams
-                )
-                doc.close()
-                
-                # Get the new size and calculate reduction
-                compressed_bytes = out_stream.getvalue()
+                # Execute the command
+                subprocess.run(gs_command, check=True)
+
+                # 3. Read the compressed file back into memory
+                with open(temp_out_path, "rb") as f:
+                    compressed_bytes = f.read()
+                    
                 new_size = len(compressed_bytes)
                 reduction = (1 - (new_size / original_size)) * 100
-                
-                # Display results
+
+                # 4. Clean up (Delete the temp files from the server)
+                os.remove(temp_in_path)
+                os.remove(temp_out_path)
+
+                # Display Results
                 st.success("Compression successful!")
-                
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Original Size", f"{original_size / (1024*1024):.2f} MB")
                 col2.metric("New Size", f"{new_size / (1024*1024):.2f} MB")
                 col3.metric("Reduction", f"{reduction:.1f}%")
                 
-                # Provide the download button
                 st.download_button(
                     label="⬇️ Download Compressed PDF",
                     data=compressed_bytes,
